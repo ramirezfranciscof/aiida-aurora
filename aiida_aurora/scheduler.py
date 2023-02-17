@@ -101,7 +101,7 @@ class TomatoScheduler(Scheduler):
     # the scheduler command
     # (NOTE: if applicable, you should configure the computer to load the appropriate virtual environment,
     # in order to make this command available)
-    KETCHUP = "ketchup"
+    KETCHUP = "/home/aiida/.conda/envs/tomato/bin/ketchup"
 
     def _get_joblist_command(self, jobs=None, user=None):
         """The command to report full information on existing jobs.
