@@ -68,8 +68,7 @@ def main_script():
     #batteries_specifications = read_specifications('batteries.json')
 
     for battery_specification in batteries_specifications:
-        print(battery_specification)
-        continue
+        battery_name = battery_specification.metadata.name
         sample_node = getmake_sample(battery_specification)
 
         WorkflowClass = WorkflowFactory('aurora.stress_test')
@@ -81,10 +80,10 @@ def main_script():
             cycler_overrides = CYCLER_OVERRIDES,
             monitor_overrides = MONITOR_OVERRIDES,
         )
+        print(f'Preparations ready for battery `{battery_name}` ... ')
         workflow_node = submit(workflow_builder)
 
         workflow_pk = workflow_node.pk
-        battery_name = battery_specification.metadata.name
         print(f'Workflow <{workflow_pk}> submitted for battery `{battery_name}` ... ')
 
 ####################################################################################################

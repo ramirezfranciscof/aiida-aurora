@@ -9,15 +9,15 @@ from pydantic.utils import deep_update
 from aiida import orm
 from aiida.common import AttributeDict
 from aiida.engine import ToContext, WorkChain
-from aiida.plugins import CalculationFactory, DataFactory
+from aiida.plugins import WorkflowFactory, CalculationFactory, DataFactory
 
 TomatoCalcjob = CalculationFactory('aurora.cycler')
-CyclingSpecsData = aiida.plugins.DataFactory('aurora.cyclingspecs')
-BatterySampleData = aiida.plugins.DataFactory('aurora.batterysample')
-TomatoSettingsData = aiida.plugins.DataFactory('aurora.tomatosettings')
+CyclingSpecsData = DataFactory('aurora.cyclingspecs')
+BatterySampleData = DataFactory('aurora.batterysample')
+TomatoSettingsData = DataFactory('aurora.tomatosettings')
 
 CalcjobMonitor = WorkflowFactory('calcmonitor.monitor_wrapper')
-TomatoMonitorData = aiida.plugins.DataFactory('calcmonitor.monitor.tomatobiologic')
+TomatoMonitorData = DataFactory('calcmonitor.monitor.tomatobiologic')
 
 BASEPATH = pathlib.Path(__file__).parent.resolve()
 with open(f'{BASEPATH}/stress_test_defaults.json', 'r') as fileobj:
@@ -39,11 +39,11 @@ class StressTestWorkChain(WorkChain):
         """Define the process specification."""
         # yapf: disable
         super().define(spec)
-        spec.expose_inputs(TomatoCalcjob, namespace='protection_cycle', exclude=('battery_sample',))
-        spec.expose_inputs(TomatoCalcjob, namespace='formation_cycle', exclude=('battery_sample',))
-        spec.expose_inputs(TomatoCalcjob, namespace='longterm_cycle', exclude=('battery_sample',))
-        spec.expose_inputs(TomatoCalcjob, namespace='discharge_cycle', exclude=('battery_sample',))
-        spec.expose_inputs(CalcjobMonitor, namespace='monitor')
+        spec.expose_inputs(TomatoCalcjob, namespace='protection_cycle')#, exclude=('battery_sample',))
+        spec.expose_inputs(TomatoCalcjob, namespace='formation_cycle')#, exclude=('battery_sample',))
+        spec.expose_inputs(TomatoCalcjob, namespace='longterm_cycle')#, exclude=('battery_sample',))
+        spec.expose_inputs(TomatoCalcjob, namespace='discharge_cycle')#, exclude=('battery_sample',))
+        spec.expose_inputs(CalcjobMonitor, namespace='monitor', exclude=('target_uuid',))
 
         spec.input("battery_sample", valid_type=BatterySampleData, help="Battery sample used.")
 
@@ -51,14 +51,14 @@ class StressTestWorkChain(WorkChain):
             cls.run_protection_precycle,
             cls.run_formation_cycle,
             cls.run_longterm_cycling,
-            cls.run_discharge_procedure,
+            cls.run_discharge_cycle,
             cls.gather_results,
         )
 
-        spec.output("results_protection", valid_type=ArrayData, help="Results of the protection step.")
-        spec.output("results_formation", valid_type=ArrayData, help="Results of the formation step.")
-        spec.output("results_cycling", valid_type=ArrayData, help="Results of the main cycling experiment.")
-        spec.output("results_discharge", valid_type=ArrayData, help="Results of the final discharge.")
+        spec.output("results_protection", valid_type=orm.ArrayData, help="Results of the protection step.")
+        spec.output("results_formation", valid_type=orm.ArrayData, help="Results of the formation step.")
+        spec.output("results_cycling", valid_type=orm.ArrayData, help="Results of the main cycling experiment.")
+        spec.output("results_discharge", valid_type=orm.ArrayData, help="Results of the final discharge.")
 
         spec.exit_code(
             501,
@@ -84,6 +84,7 @@ class StressTestWorkChain(WorkChain):
         Return a builder prepopulated with inputs selected according to the chosen protocol.
         """
         workchain_builder = cls.get_builder()
+        workchain_builder.battery_sample = battery_sample
 
         if tomato_overrides is None:
             tomato_overrides = {}
@@ -102,10 +103,13 @@ class StressTestWorkChain(WorkChain):
             cycler_overrides_dict = cycler_overrides['protection_cycle']
             cycler_method_dict = mydeep_update(cycler_method_dict, cycler_overrides_dict)
 
-        builder = BatteryCyclerExperiment.get_builder()
+        builder = TomatoCalcjob.get_builder()
         builder.code = ketchup_code
         builder.technique = CyclingSpecsData(cycler_method_dict)
         builder.control_settings = TomatoSettingsData(tomato_settings_dict)
+        print(battery_sample)
+        builder.battery_sample = battery_sample # ERROR if postponed?
+        builder.metadata.options['resources'] = {'num_cores': 1} # WC ERROR IF NOT?
         workchain_builder.protection_cycle = builder
 
         # formation_cycle
@@ -119,10 +123,12 @@ class StressTestWorkChain(WorkChain):
             cycler_overrides_dict = cycler_overrides['formation_cycle']
             cycler_method_dict = mydeep_update(cycler_method_dict, cycler_overrides_dict)
 
-        builder = BatteryCyclerExperiment.get_builder()
+        builder = TomatoCalcjob.get_builder()
         builder.code = ketchup_code
         builder.technique = CyclingSpecsData(cycler_method_dict)
         builder.control_settings = TomatoSettingsData(tomato_settings_dict)
+        builder.battery_sample = battery_sample # ERROR if postponed?
+        builder.metadata.options['resources'] = {'num_cores': 1} # WC ERROR IF NOT?
         workchain_builder.formation_cycle = builder
 
         # longterm_cycle (monitor)
@@ -136,21 +142,24 @@ class StressTestWorkChain(WorkChain):
             cycler_overrides_dict = cycler_overrides['longterm_cycle']
             cycler_method_dict = mydeep_update(cycler_method_dict, cycler_overrides_dict)
 
-        builder = BatteryCyclerExperiment.get_builder()
+        builder = TomatoCalcjob.get_builder()
         builder.code = ketchup_code
         builder.technique = CyclingSpecsData(cycler_method_dict)
         builder.control_settings = TomatoSettingsData(tomato_settings_dict)
+        builder.battery_sample = battery_sample # ERROR if postponed?
+        builder.metadata.options['resources'] = {'num_cores': 1} # WC ERROR IF NOT?
         workchain_builder.longterm_cycle = builder
 
         monitor_protocol_dict = DEFAULT_MONITOR_PROTOCOL
         if monitor_overrides is not None:
             monitor_protocol_dict = deep_update(monitor_protocol_dict, monitor_overrides)
 
-        monitor_builder = TomatoMonitorCalcjob.get_builder()
-        monitor_builder.code = monitor_code
-        monitor_builder.metadata.options.parser_name = "calcmonitor.cycler"
+        monitor_builder = CalcjobMonitor.get_builder()
+        monitor_builder.calcjob.code = monitor_code
+        monitor_builder.calcjob.metadata.options.parser_name = "calcmonitor.cycler"
         monitor_protocol = TomatoMonitorData(dict=monitor_protocol_dict)
-        monitor_builder.monitor_protocols = {'monitor1': monitor_protocol}
+        monitor_builder.calcjob.monitor_protocols = {'monitor1': monitor_protocol}
+        monitor_builder.calcjob.metadata.options['resources'] = {'num_machines': 1, 'num_mpiprocs_per_machine': 1} # WC ERROR IF NOT?
         workchain_builder.monitor = monitor_builder
 
         # discharge_cycle
@@ -165,10 +174,12 @@ class StressTestWorkChain(WorkChain):
             cycler_overrides_dict = cycler_overrides['discharge_cycle']
             cycler_method_dict = mydeep_update(cycler_method_dict, cycler_overrides_dict)
 
-        builder = BatteryCyclerExperiment.get_builder()
+        builder = TomatoCalcjob.get_builder()
         builder.code = ketchup_code
         builder.technique = CyclingSpecsData(cycler_method_dict)
         builder.control_settings = TomatoSettingsData(tomato_settings_dict)
+        builder.battery_sample = battery_sample # ERROR if postponed?
+        builder.metadata.options['resources'] = {'num_cores': 1} # WC ERROR IF NOT?
         workchain_builder.discharge_cycle = builder
 
         return workchain_builder
@@ -178,10 +189,10 @@ class StressTestWorkChain(WorkChain):
         """TODO."""
         calcjob_dictin = self.exposed_inputs(TomatoCalcjob, namespace='protection_cycle')
         calcjob_inputs = AttributeDict(calcjob_dictin)
-        battery_sample = self.inputs.battery_sample
-        battery_name = battery_sample.attributes['metadata']['name']
-        calcjob_inputs.sample = battery_sample
+        #battery_sample = self.inputs.battery_sample
+        #calcjob_inputs.battery_sample = battery_sample
         calcjob_node = self.submit(TomatoCalcjob, **calcjob_inputs)
+        battery_name = calcjob_inputs.battery_sample.attributes['metadata']['name']
         self.report(f'launching protection cycle <{calcjob_node.pk}> for sample `{battery_name}`')
         return ToContext(protection_cycle_calcjob=calcjob_node)
 
@@ -189,10 +200,10 @@ class StressTestWorkChain(WorkChain):
         """TODO."""
         calcjob_dictin = self.exposed_inputs(TomatoCalcjob, namespace='formation_cycle')
         calcjob_inputs = AttributeDict(calcjob_dictin)
-        battery_sample = self.inputs.battery_sample
-        battery_name = battery_sample.attributes['metadata']['name']
-        calcjob_inputs.sample = battery_sample
+        #battery_sample = self.inputs.battery_sample
+        #calcjob_inputs.battery_sample = battery_sample
         calcjob_node = self.submit(TomatoCalcjob, **calcjob_inputs)
+        battery_name = calcjob_inputs.battery_sample.attributes['metadata']['name']
         self.report(f'launching formation cycle <{calcjob_node.pk}> for sample `{battery_name}`')
         return ToContext(formation_cycle_calcjob=calcjob_node)
 
@@ -200,10 +211,10 @@ class StressTestWorkChain(WorkChain):
         """TODO."""
         calcjob_dictin = self.exposed_inputs(TomatoCalcjob, namespace='longterm_cycle')
         calcjob_inputs = AttributeDict(calcjob_dictin)
-        battery_sample = self.inputs.battery_sample
-        battery_name = battery_sample.attributes['metadata']['name']
-        calcjob_inputs.sample = battery_sample
+        #battery_sample = self.inputs.battery_sample
+        #calcjob_inputs.battery_sample = battery_sample
         calcjob_node = self.submit(TomatoCalcjob, **calcjob_inputs)
+        battery_name = calcjob_inputs.battery_sample.attributes['metadata']['name']
         self.report(f'launching longterm cycle <{calcjob_node.pk}> for sample `{battery_name}`')
 
         monitor_dictin = self.exposed_inputs(CalcjobMonitor, namespace='monitor')
@@ -219,10 +230,10 @@ class StressTestWorkChain(WorkChain):
         """TODO."""
         calcjob_dictin = self.exposed_inputs(TomatoCalcjob, namespace='discharge_cycle')
         calcjob_inputs = AttributeDict(calcjob_dictin)
-        battery_sample = self.inputs.battery_sample
-        battery_name = battery_sample.attributes['metadata']['name']
-        calcjob_inputs.sample = battery_sample
+        #battery_sample = self.inputs.battery_sample
+        #calcjob_inputs.battery_sample = battery_sample
         calcjob_node = self.submit(TomatoCalcjob, **calcjob_inputs)
+        battery_name = calcjob_inputs.battery_sample.attributes['metadata']['name']
         self.report(f'launching discharge cycle <{calcjob_node.pk}> for sample `{battery_name}`')
         return ToContext(discharge_cycle_calcjob=calcjob_node)
 
